@@ -64,7 +64,7 @@ class SCCA:
         verbose = kwargs.get('verbose', False)
         
         # initialise w1 using svd
-        U, S, V = np.linalg.svd(X.T.dot(Y))
+        U, S, V = np.linalg.svd(X.T.dot(Y), full_matrices=False)
         self.wx = U[:,0] / np.linalg.norm(U[:,0])
         
         # set up sparsity constraints and ensure cx > 1
@@ -133,3 +133,10 @@ class SCCA:
         self.y_scores = Y.dot(self.wy)
         
         self.r = np.corrcoef(self.x_scores, self.y_scores)[0][1]
+        
+    def predict(self, Xs, Ys):
+        xs_scores = Xs.dot(self.wx)
+        ys_scores = Ys.dot(self.wy)
+        
+        r = np.corrcoef(xs_scores, ys_scores)[0][1]
+        return r
