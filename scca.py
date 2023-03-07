@@ -72,9 +72,10 @@ class SCCA:
         cy = np.round(np.sqrt(Y.shape[1]) * l1_y, decimals=2)
                 
         for i in range(self.max_iter):
-            if verbose:
-                print('iter:', i)
-                
+            if i > 0:
+                old_wx = self.wx
+                old_wy = self.wy
+                            
             # compute w2            
             self.ay = Y.T.dot(X).dot(self.wx)
             if sign_y > 0:
@@ -127,16 +128,31 @@ class SCCA:
                     self.wx = Sx / np.linalg.norm(Sx)
                     l1_norm_wx_r = np.linalg.norm(self.wx, 1).round(decimals=2)
                     delta_tmp = delta
-                    delta_max = delta_max / 2
+                    delta_max = delta_max / 2        
+            
+            if verbose:
+                if i == 0:
+                    print('iter:', i)
+                else:
+                    x_diff = self.wx - old_wx
+                    y_diff = self.wy - old_wy
+                    print('iter:', i,
+                          'd(x) =', np.dot(x_diff, x_diff),
+                          'd(y) =', np.dot(y_diff, y_diff))
 
         self.x_scores = X.dot(self.wx)
         self.y_scores = Y.dot(self.wy)
         
         self.r = np.corrcoef(self.x_scores, self.y_scores)[0][1]
         
-    def predict(self, Xs, Ys):
-        xs_scores = Xs.dot(self.wx)
-        ys_scores = Ys.dot(self.wy)
+
         
-        r = np.corrcoef(xs_scores, ys_scores)[0][1]
-        return r
+    def transform(self, Xs, Ys=None):
+        xs_scores = Xs.dot(self.wx)
+
+        
+        if Ys is not None:
+            ys_scores = Ys.dot(self.wy)
+            return xs_scores, ys_scores
+        else:
+            return xs_scores
