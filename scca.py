@@ -4,8 +4,36 @@ from __future__ import division
 import numpy as np
 from scipy import optimize , linalg
 from scipy.linalg import LinAlgError
+from six import with_metaclass
+from abc import ABCMeta, abstractmethod
+from utils import deflate
 
-class SCCA:
+class CCABase(with_metaclass(ABCMeta)):
+    """ 
+    Base class for CCA algorithms
+        All Warps must define the following methods::
+
+            CCA.fit() - fit the model
+            CCA.transform() - compute tha canonical scores
+            Warp.warp_predictions() - compute predictive distribution
+
+    """
+    def __init__(self, **kwargs):
+        # parse arguments
+        self.max_iter = kwargs.get('max_iter', 1000)
+        self.n_components = kwargs.get('n_components', 1)
+
+    @abstractmethod
+    def fit(self, X, param):
+        """ Evaluate the warping function (mapping non-Gaussian respone 
+            variables to Gaussian variables)
+        """
+
+    @abstractmethod
+    def transform(self, x, param):
+        """ Return the derivative of the warp, dw(x)/dx """
+
+class SCCA(CCABase):
     """Sparse canonical correlation analysis 
 
     Computes a sparse canonical correlation analysis betweeen two sets of
@@ -35,11 +63,6 @@ class SCCA:
 
     Written by A. Marquand
     """
-
-    def __init__(self, **kwargs):
-        # parse arguments
-        self.max_iter = kwargs.get('max_iter', 1000)
-        self.n_components = kwargs.get('n_components', 1)
         
     def fit(self, X, Y, **kwargs):
         """ Fit a binary sCCA model
@@ -54,6 +77,8 @@ class SCCA:
         :param Y: N x D2 data array (view 2)
         :param l1_x: sparsity parameter for view 1 (0..1, default=0.5)
         :param l1_y: sparsity parameter for view 2 (0..1, default=0.5)    
+        :param sign_x: constraint for view 1 (-1:neg, 0:none(default), 1:pos)
+        :param sign_y: constraint for view 1 (-1:neg, 0:none(default), 1:pos)
         """
         
         # get parameters
@@ -63,96 +88,122 @@ class SCCA:
         sign_y = kwargs.get('sign_y', 0)
         verbose = kwargs.get('verbose', False)
         
-        # initialise w1 using svd
-        U, S, V = np.linalg.svd(X.T.dot(Y), full_matrices=False)
-        self.wx = U[:,0] / np.linalg.norm(U[:,0])
-        
-        # set up sparsity constraints and ensure cx > 1
-        cx = np.round(max(np.sqrt(X.shape[1]) * l1_x, 1.0), decimals=2)
-        cy = np.round(np.sqrt(Y.shape[1]) * l1_y, decimals=2)
+        #initialise weights
+        self.Wx = np.zeros((X.shape[1], self.n_components))
+        self.Wy = np.zeros((Y.shape[1], self.n_components))
+        self.x_scores = np.zeros((X.shape[0], self.n_components))
+        self.y_scores = np.zeros((Y.shape[0], self.n_components))
+        self.r = np.zeros(self.n_components)
+
+        for k in range(self.n_components):
+            if verbose: 
+                print('Component', k, 'of', self.n_components,':')
+
+            # initialise w1 using svd
+            U, S, V = np.linalg.svd(X.T.dot(Y), full_matrices=False)
+            wx = U[:,0] / np.linalg.norm(U[:,0])
+            
+            # set up sparsity constraints and ensure cx > 1
+            cx = np.round(max(np.sqrt(X.shape[1]) * l1_x, 1.0), decimals=2)
+            cy = np.round(np.sqrt(Y.shape[1]) * l1_y, decimals=2)
+            
+            for i in range(self.max_iter):
+                if i > 0:
+                    old_wx = wx
+                    old_wy = wy
+                                
+                # compute w2            
+                self.ay = Y.T.dot(X).dot(wx)
+                if sign_y > 0:
+                    self.ay = np.maximum(self.ay,0)
+                elif sign_y < 0: 
+                    self.ay = -np.maximum(-self.ay,0)
                 
-        for i in range(self.max_iter):
-            if i > 0:
-                old_wx = self.wx
-                old_wy = self.wy
-                            
-            # compute w2            
-            self.ay = Y.T.dot(X).dot(self.wx)
-            if sign_y > 0:
-                self.ay = np.maximum(self.ay,0)
-            elif sign_y < 0: 
-                self.ay = -np.maximum(-self.ay,0)
-            
-            sign_ay = (self.ay > 0) * 2 - 1
-            Sy_p = np.abs(self.ay)
-            Sy = sign_ay * (Sy_p * (Sy_p > 0))
-            self.ay = Sy
-            self.wy = self.ay / np.linalg.norm(self.ay)
-            l1_norm_wy_r = np.linalg.norm(self.wy, 1).round(decimals=2)
-            
-            if l1_norm_wy_r >= cy:
-                delta_max = max(np.abs(self.ay))/2
-                delta_tmp = 0
-                while l1_norm_wy_r != cy:
-                    sign_delta = (np.linalg.norm(self.wy, 1) > cy)*2 -1
-                    delta = delta_tmp + sign_delta * delta_max 
-                    Sy_p = np.abs(self.ay) - delta
-                    Sy = sign_ay * (Sy_p * (Sy_p > 0))
-                    self.wy = Sy / np.linalg.norm(Sy)
-                    l1_norm_wy_r = np.linalg.norm(self.wy, 1).round(decimals=2)
-                    delta_tmp = delta
-                    delta_max = delta_max/2
+                sign_ay = (self.ay > 0) * 2 - 1
+                Sy_p = np.abs(self.ay)
+                Sy = sign_ay * (Sy_p * (Sy_p > 0))
+                self.ay = Sy
+                wy = self.ay / np.linalg.norm(self.ay)
+                l1_norm_wy_r = np.linalg.norm(wy, 1).round(decimals=2)
+                
+                if l1_norm_wy_r >= cy:
+                    delta_max = max(np.abs(self.ay))/2
+                    delta_tmp = 0
+                    while l1_norm_wy_r != cy:
+                        sign_delta = (np.linalg.norm(wy, 1) > cy)*2 -1
+                        delta = delta_tmp + sign_delta * delta_max 
+                        Sy_p = np.abs(self.ay) - delta
+                        Sy = sign_ay * (Sy_p * (Sy_p > 0))
+                        wy = Sy / np.linalg.norm(Sy)
+                        l1_norm_wy_r = np.linalg.norm(wy, 1).round(decimals=2)
+                        delta_tmp = delta
+                        delta_max = delta_max/2
 
-            # compute w1
-            self.ax = X.T.dot(Y).dot(self.wy)
-            if sign_x > 0:
-                self.ax = np.maximum(self.ax,0)
-            elif sign_x < 0:
-                self.ax = -np.maximum(-self.ax,0)
-            
-            sign_ax = (self.ax > 0) * 2 - 1
-            Sx_p = np.abs(self.ax)
-            Sx = sign_ax * Sx_p * (Sx_p > 0)
-            self.ax = Sx
-            self.wx = self.ax / np.linalg.norm(self.ax)
-            l1_norm_wx_r = np.linalg.norm(self.wx, 1).round(decimals=2)
-            
-            if l1_norm_wy_r >= cx:
-                delta_max = max(np.abs(self.ax))/2
-                delta_tmp = 0
-                while l1_norm_wx_r != cx: 
-                    sign_delta = (np.linalg.norm(self.wx, 1) > cx)*2 -1 
-                    delta = delta_tmp + sign_delta*delta_max
-                    Sx_p = np.abs(self.ax)-delta
-                    Sx = sign_ax * (Sx_p * (Sx_p > 0))
-                    self.wx = Sx / np.linalg.norm(Sx)
-                    l1_norm_wx_r = np.linalg.norm(self.wx, 1).round(decimals=2)
-                    delta_tmp = delta
-                    delta_max = delta_max / 2        
-            
-            if verbose:
-                if i == 0:
-                    print('iter:', i)
-                else:
-                    x_diff = self.wx - old_wx
-                    y_diff = self.wy - old_wy
-                    print('iter:', i,
-                          'd(x) =', np.dot(x_diff, x_diff),
-                          'd(y) =', np.dot(y_diff, y_diff))
+                # compute w1
+                self.ax = X.T.dot(Y).dot(wy)
+                if sign_x > 0:
+                    self.ax = np.maximum(self.ax,0)
+                elif sign_x < 0:
+                    self.ax = -np.maximum(-self.ax,0)
+                
+                sign_ax = (self.ax > 0) * 2 - 1
+                Sx_p = np.abs(self.ax)
+                Sx = sign_ax * Sx_p * (Sx_p > 0)
+                self.ax = Sx
+                wx = self.ax / np.linalg.norm(self.ax)
+                l1_norm_wx_r = np.linalg.norm(wx, 1).round(decimals=2)
+                
+                if l1_norm_wy_r >= cx:
+                    delta_max = max(np.abs(self.ax))/2
+                    delta_tmp = 0
+                    while l1_norm_wx_r != cx: 
+                        sign_delta = (np.linalg.norm(wx, 1) > cx)*2 -1 
+                        delta = delta_tmp + sign_delta*delta_max
+                        Sx_p = np.abs(self.ax)-delta
+                        Sx = sign_ax * (Sx_p * (Sx_p > 0))
+                        wx = Sx / np.linalg.norm(Sx)
+                        l1_norm_wx_r = np.linalg.norm(wx, 1).round(decimals=2)
+                        delta_tmp = delta
+                        delta_max = delta_max / 2        
+                
+                if verbose:
+                    if i == 0:
+                        print('iter:', i)
+                    else:
+                        x_diff = wx - old_wx
+                        y_diff = wy - old_wy
+                        print('iter:', i,
+                            'd(x) =', np.dot(x_diff, x_diff),
+                            'd(y) =', np.dot(y_diff, y_diff))
 
-        self.x_scores = X.dot(self.wx)
-        self.y_scores = Y.dot(self.wy)
-        
-        self.r = np.corrcoef(self.x_scores, self.y_scores)[0][1]
-        
+            x_scores = X.dot(wx)
+            y_scores = Y.dot(wy)
+            
+            self.r[k] = np.corrcoef(x_scores, y_scores)[0][1]
 
+            if self.n_components > 1:
+                if verbose: 
+                    print('deflating...')
+                X = deflate(X, wx)
+                Y = deflate(Y, wy)
+
+            # save useful quantities
+            self.Wx[:,k] = wx
+            self.Wy[:,k] = wy
+            self.x_scores[:,k] = x_scores
+            self.y_scores[:,k] = y_scores
+
+            if k == 0:
+                self.wx = wx
+                self.wy = wy
         
     def transform(self, Xs, Ys=None):
-        xs_scores = Xs.dot(self.wx)
+        xs_scores = Xs.dot(self.Wx)
 
         
         if Ys is not None:
-            ys_scores = Ys.dot(self.wy)
+            ys_scores = Ys.dot(self.Wy)
             return xs_scores, ys_scores
         else:
             return xs_scores
+    
