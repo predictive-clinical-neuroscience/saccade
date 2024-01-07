@@ -22,16 +22,16 @@ class CCABase(with_metaclass(ABCMeta)):
         # parse arguments
         self.max_iter = kwargs.get('max_iter', 1000)
         self.n_components = kwargs.get('n_components', 1)
+        self.n_views = kwargs.get('n_views',2)
 
     @abstractmethod
     def fit(self, X, param):
-        """ Evaluate the warping function (mapping non-Gaussian respone 
-            variables to Gaussian variables)
+        """ fit the scca method using param
         """
 
     @abstractmethod
     def transform(self, x, param):
-        """ Return the derivative of the warp, dw(x)/dx """
+        """ apply the scca method to new data """
 
 class SCCA(CCABase):
     """Sparse canonical correlation analysis 
@@ -193,6 +193,7 @@ class SCCA(CCABase):
             self.x_scores[:,k] = x_scores
             self.y_scores[:,k] = y_scores
 
+            # save principal canonical weights (for backward compatibility)
             if k == 0:
                 self.wx = wx
                 self.wy = wy
@@ -206,4 +207,60 @@ class SCCA(CCABase):
             return xs_scores, ys_scores
         else:
             return xs_scores
+        
+class MSCCA(CCABase):
+
+    def scca_vec(x, w):
+        
+        return a
+
+    def fit(self, X, **kwargs):
+        """ Fit a multi-way sCCA model
+
+        Basic usage::
+
+            fit(X, [extra_arguments])
+        
+        where the variables are:
     
+        :param X: list of N x D_m data arrays (M = number of views)
+        :param l1: list of sparsity parameters (0..1, default=0.5)
+        :param sign: 
+        """
+        self.n_views = len(X)
+
+        # get parameters
+        l1 = kwargs.get('l1', [0.5] * self.n_views)
+        sign = kwargs.get('sign', [0] * self.n_views)
+        verbose = kwargs.get('verbose', False)
+        
+        # initialise weights, sparsity constraints and scores
+        self.W = list()
+        self.c = list()
+        self.scores = list()
+        for v in range(self.n_views):
+            if len(X[v].shape) == 1 or X[v].shape[1] > 1:
+                w_tmp = np.random.normal(size=X[v].shape[1])
+            else:
+                w_tmp = sign[v]
+            self.W.append(w_tmp/np.linalg.norm(w_tmp))
+
+            self.c.append(np.round(max(np.sqrt(X[v].shape[1]) * l1[v], 1.0), decimals=2))
+            self.scores.append(np.zeros((X[v].shape[0], self.n_components)))
+        
+        for v in range(self.n_views):
+            if self.c[v] <= 1:
+                self.c[v] = 1
+
+        for k in range(self.n_components):
+            if verbose: 
+                print('Component', k, 'of', self.n_components,':')
+
+            scores = np.zeros((X[1].shape[0], self.n_views))
+
+    def transform(self, Xs):
+        xs_scores = list()
+        for v in range(self.n_views):
+            xs_scores.append(Xs[v].dot(self.W[v]))
+
+        return xs_scores
