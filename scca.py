@@ -107,8 +107,8 @@ class SCCA(CCABase):
             cx = np.round(max(np.sqrt(X.shape[1]) * l1_x, 1.0), decimals=2)
             cy = np.round(np.sqrt(Y.shape[1]) * l1_y, decimals=2)
             
-            for i in range(self.max_iter):
-                if i > 0:
+            for itr in range(self.max_iter):
+                if itr > 0:
                     old_wx = wx
                     old_wy = wy
                                 
@@ -167,19 +167,17 @@ class SCCA(CCABase):
                         delta_max = delta_max / 2        
                 
                 if verbose:
-                    if i == 0:
-                        print('iter:', i)
+                    if itr == 0:
+                        print('iter:', itr)
                     else:
                         x_diff = wx - old_wx
                         y_diff = wy - old_wy
-                        print('iter:', i,
+                        print('iter:', itr,
                             'd(x) =', np.dot(x_diff, x_diff),
                             'd(y) =', np.dot(y_diff, y_diff))
 
             x_scores = X.dot(wx)
             y_scores = Y.dot(wy)
-            
-            self.r[k] = np.corrcoef(x_scores, y_scores)[0][1]
 
             if self.n_components > 1:
                 if verbose: 
@@ -210,9 +208,38 @@ class SCCA(CCABase):
         
 class MSCCA(CCABase):
 
-    def scca_vec(x, w):
+    def _compute_update(self, X, i, k):
         
+        if i == 0:
+            w_adder = range(1,self.n_views)
+        else:
+            w_adder = range(1)
+
+        a = np.zeros(self.n)
+        for j in w_adder:
+            if j >= 0:
+                a = a + X[i].T.dot( X[j].dot(self.W[j][:,k]) )
         return a
+    
+    def _sparsify(self, w, a, norm_wr, c, sign_a):
+
+        if len(w) > 1:
+            if norm_wr >= c:
+                delta_max = max(np.abs(a))/2
+                delta_tmp  = 0
+
+                while norm_wr != c:
+                    sign_delta = (np.linalg.norm(w, 1) > c) * 2 - 1
+                    delta = delta_tmp + sign_delta * delta_max
+                    S_p = np.abs(a) - delta
+                    S = sign_a * S_p * (S_p > 0)
+                    w = S / np.linalg.norm(S)
+                    norm_wr = np.linalg.norm(w,1).round(decimals=2)
+                    delta_tmp = delta
+                    deltamax = deltamax / 2
+
+        return w
+
 
     def fit(self, X, **kwargs):
         """ Fit a multi-way sCCA model
@@ -228,6 +255,7 @@ class MSCCA(CCABase):
         :param sign: 
         """
         self.n_views = len(X)
+        self.n = X[0].shape[0]
 
         # get parameters
         l1 = kwargs.get('l1', [0.5] * self.n_views)
@@ -238,29 +266,61 @@ class MSCCA(CCABase):
         self.W = list()
         self.c = list()
         self.scores = list()
-        for v in range(self.n_views):
-            if len(X[v].shape) == 1 or X[v].shape[1] > 1:
-                w_tmp = np.random.normal(size=X[v].shape[1])
+        for i in range(self.n_views):
+            if len(X[i].shape) == 1 or X[i].shape[1] > 1:
+                w_tmp = sign[i]
             else:
-                w_tmp = sign[v]
+                w_tmp = np.random.normal(size=X[i].shape[1])
             self.W.append(w_tmp/np.linalg.norm(w_tmp))
 
-            self.c.append(np.round(max(np.sqrt(X[v].shape[1]) * l1[v], 1.0), decimals=2))
-            self.scores.append(np.zeros((X[v].shape[0], self.n_components)))
+            self.c.append(np.round(max(np.sqrt(X[i].shape[1]) * l1[i], 1.0), decimals=2))
+            if X[i].shape[0] != self.n:
+                raise ValueError("view " + str(i) + " has different sample size to view 0")
+            self.scores.append(np.zeros((X[i].shape[0], self.n_components)))
         
-        for v in range(self.n_views):
-            if self.c[v] <= 1:
-                self.c[v] = 1
-
+        for i in range(self.n_views):
+            if self.c[i] <= 1:
+                self.c[i] = 1
+        
+        # loop over components
         for k in range(self.n_components):
             if verbose: 
                 print('Component', k, 'of', self.n_components,':')
+            for itr in range(self.max_iter):
+                # loop over views
+                for i in range(self.n_views):
+                    if len(X[i].shape) == 1 or X[i].shape[1] == 1:
+                        # trivial case
+                        w  = sign[i]
+                    else:                                            
+                        a = self._compute_update(X, i, k)
 
-            scores = np.zeros((X[1].shape[0], self.n_views))
+                        if sign[i] > 0:
+                            a = np.maximum(a,0)
+                        elif sign[j] < 0: 
+                            a = -np.maximum(-a,0)
+                        
+                        sign_a = (a > 0) * 2 - 1
+                        S_p = np.abs(a)
+                        S = sign_a * (S_p * (S_p > 0))
+                        a = S
+                        w = a / np.linalg.norm(a)
+                        norm_wr = np.linagl.norm(w,1).round(decimals=2)
+
+                        w = self._sparsify(w, a, norm_wr, self.c[i], sign_a)
+                    
+                    self.W[i][:,k] = w
+                    self.scores[i][:,k] = X[i].dot(w)
+            
+            if self.n_components > 1:
+                if verbose: 
+                    print('deflating...')
+                for i in range(self.n_views):
+                    X[i] = deflate(X[i], self.W[i][:,k])
 
     def transform(self, Xs):
         xs_scores = list()
-        for v in range(self.n_views):
-            xs_scores.append(Xs[v].dot(self.W[v]))
+        for i in range(self.n_views):
+            xs_scores.append(Xs[i].dot(self.W[i]))
 
         return xs_scores
