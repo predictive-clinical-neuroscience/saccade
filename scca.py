@@ -43,7 +43,6 @@ class SCCA(CCABase):
 
         scca = SCCA()
         scca.fit(X, Y)
-        Y_pred = scca.predict(X)
 
     where the variables are:
     
@@ -61,7 +60,7 @@ class SCCA(CCABase):
     Ing, A, et al. 2019. Identification of Neurobehavioural Symptom Groups 
     Based on Shared Brain Mechanisms. Nature Human Behaviour 3 (12): 1306--18.
 
-    Written by A. Marquand
+    Written by A. Marquand (ported from Alex Ing's matlab code)
     """
         
     def fit(self, X, Y, **kwargs):
@@ -207,21 +206,68 @@ class SCCA(CCABase):
             return xs_scores
         
 class MSCCA(CCABase):
+    """Sparse multi-view canonical correlation analysis 
+
+    Computes a sparse canonical correlation analysis betweeen multiple sets of
+    variables
+
+    Basic usage::
+
+        scca = SCCA()
+        scca.fit(X)
+
+    where the variables are:
+    
+    :param X: M length list of N x D_m data arrays
+
+    References:
+        
+    Witten, D. et al 2009. A Penalized Matrix Decomposition, with Applications 
+    to Sparse Principal Components and Canonical Correlation Analysis.
+    Biostatistics 10 (3): 515--34.
+    
+    Ing, A, et al. 2019. Identification of Neurobehavioural Symptom Groups 
+    Based on Shared Brain Mechanisms. Nature Human Behaviour 3 (12): 1306--18.
+
+    Written by A. Marquand
+    """
 
     def _compute_update(self, X, i, k):
-        
+        """ Compute the (unnormalised) SCCA update criterion for the i-th view k-th component
+            
+            where the variables are:
+    
+            :param X: list containing the data matrices for all view (M length)
+            :param i: current view index
+            :param k: k component index 
+
+            :returns a: un-normalised update criterion
+
+        """
         if i == 0:
             w_adder = range(1,self.n_views)
         else:
             w_adder = range(1)
 
-        a = np.zeros(self.n)
+        a = np.zeros(X[i].shape[1])
         for j in w_adder:
             if j >= 0:
                 a = a + X[i].T.dot( X[j].dot(self.W[j][:,k]) )
         return a
     
     def _sparsify(self, w, a, norm_wr, c, sign_a):
+        """ Apply sparsity to a (one dimensional) weight vector
+
+            where the variables are:
+    
+            :param w: weight vector        
+            :param a: unnormalised criterion vector
+            :param norm_wr: weight vector normalised and rounded (2 decimals)
+            :param c: constraint vector
+            :param sign_a: sign of criterion vector 
+
+            :returns w: sparsified weight vector
+        """
 
         if len(w) > 1:
             if norm_wr >= c:
@@ -236,13 +282,13 @@ class MSCCA(CCABase):
                     w = S / np.linalg.norm(S)
                     norm_wr = np.linalg.norm(w,1).round(decimals=2)
                     delta_tmp = delta
-                    deltamax = deltamax / 2
+                    delta_max = delta_max / 2
 
         return w
 
 
     def fit(self, X, **kwargs):
-        """ Fit a multi-way sCCA model
+        """ Fit a multi-way sCCA model on M views of the data 
 
         Basic usage::
 
@@ -250,10 +296,11 @@ class MSCCA(CCABase):
         
         where the variables are:
     
-        :param X: list of N x D_m data arrays (M = number of views)
+        :param X: list of N x D_m data arrays (m = number of views)
         :param l1: list of sparsity parameters (0..1, default=0.5)
-        :param sign: 
+        :param sign: list of sign constraints (-1:neg, 0:none(default), 1:pos)
         """
+
         self.n_views = len(X)
         self.n = X[0].shape[0]
 
@@ -267,17 +314,22 @@ class MSCCA(CCABase):
         self.c = list()
         self.scores = list()
         for i in range(self.n_views):
-            if len(X[i].shape) == 1 or X[i].shape[1] > 1:
-                w_tmp = sign[i]
-            else:
-                w_tmp = np.random.normal(size=X[i].shape[1])
-            self.W.append(w_tmp/np.linalg.norm(w_tmp))
+            Wi = np.zeros((X[i].shape[1], self.n_components))
+            for k in range(self.n_components):
+                if len(X[i].shape) == 1 or X[i].shape[1] == 1:
+                    w_tmp = sign[i]
+                else:
+                    w_tmp = np.random.normal(size=X[i].shape[1])
+                Wi[:,k] = w_tmp/np.linalg.norm(w_tmp)
+
+            self.W.append(Wi)
 
             self.c.append(np.round(max(np.sqrt(X[i].shape[1]) * l1[i], 1.0), decimals=2))
             if X[i].shape[0] != self.n:
                 raise ValueError("view " + str(i) + " has different sample size to view 0")
             self.scores.append(np.zeros((X[i].shape[0], self.n_components)))
         
+        # make sure constraints are at least 1
         for i in range(self.n_views):
             if self.c[i] <= 1:
                 self.c[i] = 1
@@ -297,15 +349,14 @@ class MSCCA(CCABase):
 
                         if sign[i] > 0:
                             a = np.maximum(a,0)
-                        elif sign[j] < 0: 
+                        elif sign[i] < 0: 
                             a = -np.maximum(-a,0)
                         
                         sign_a = (a > 0) * 2 - 1
                         S_p = np.abs(a)
-                        S = sign_a * (S_p * (S_p > 0))
-                        a = S
+                        a = sign_a * (S_p * (S_p > 0))
                         w = a / np.linalg.norm(a)
-                        norm_wr = np.linagl.norm(w,1).round(decimals=2)
+                        norm_wr = np.linalg.norm(w,1).round(decimals=2)
 
                         w = self._sparsify(w, a, norm_wr, self.c[i], sign_a)
                     
