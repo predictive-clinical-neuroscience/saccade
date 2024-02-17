@@ -232,7 +232,7 @@ class MSCCA(CCABase):
     Written by A. Marquand
     """
 
-    def _compute_update(self, X, i, k):
+    def _compute_update(self, X, i, k, has_data=None):
         """ Compute the (unnormalised) SCCA update criterion for the i-th view k-th component
             
             where the variables are:
@@ -244,15 +244,33 @@ class MSCCA(CCABase):
             :returns a: un-normalised update criterion
 
         """
+
         if i == 0:
             w_adder = range(1,self.n_views)
         else:
             w_adder = range(1)
 
-        a = np.zeros(X[i].shape[1])
+        p_i = X[i].shape[1]
+        if has_data is None:
+            X_i = X[i]
+        else:
+            X_i = np.zeros((self.n, p_i))
+            X_i[has_data[i], :] = X[i]
+
+        a = np.zeros(p_i)
         for j in w_adder:
             if j >= 0:
-                a = a + X[i].T.dot( X[j].dot(self.W[j][:,k]) )
+                if has_data is None: 
+                    X_j = X[j]
+                else: 
+                    # compute non-zero indices for next data view
+                    X_j = np.zeros((self.n, X[j].shape[1]))
+                    X_j[has_data[j],:] = X[j]
+
+                #a_j = np.zeros(self.n)
+                a_j = X_j.dot(self.W[j][:,k])
+                
+                a = a + X_i.T.dot(a_j)
         return a
     
     def _sparsify(self, w, a, norm_wr, c, sign_a):
@@ -308,6 +326,7 @@ class MSCCA(CCABase):
         l1 = kwargs.get('l1', [0.5] * self.n_views)
         sign = kwargs.get('sign', [0] * self.n_views)
         verbose = kwargs.get('verbose', False)
+        samples_included  = kwargs.get('has_data', None)
         
         # initialise weights, sparsity constraints and scores
         self.W = list()
@@ -325,7 +344,7 @@ class MSCCA(CCABase):
             self.W.append(Wi)
 
             self.c.append(np.round(max(np.sqrt(X[i].shape[1]) * l1[i], 1.0), decimals=2))
-            if X[i].shape[0] != self.n:
+            if samples_included is None and X[i].shape[0] != self.n:
                 raise ValueError("view " + str(i) + " has different sample size to view 0")
             self.scores.append(np.zeros((X[i].shape[0], self.n_components)))
         
@@ -345,7 +364,7 @@ class MSCCA(CCABase):
                         # trivial case
                         w  = sign[i]
                     else:                                            
-                        a = self._compute_update(X, i, k)
+                        a = self._compute_update(X, i, k, has_data=samples_included)
 
                         if sign[i] > 0:
                             a = np.maximum(a,0)
