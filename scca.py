@@ -338,7 +338,13 @@ class MSCCA(CCABase):
                 if len(X[i].shape) == 1 or X[i].shape[1] == 1:
                     w_tmp = sign[i]
                 else:
-                    w_tmp = np.random.normal(size=X[i].shape[1])
+                    if sign[i] == 0:
+                        w_tmp = np.random.normal(size=X[i].shape[1])
+                    elif sign[i] > 0:
+                        w_tmp = np.random.uniform(size=X[i].shape[1])
+                    elif sign[i] < 0:
+                        w_tmp = -np.random.uniform(size=X[i].shape[1])
+
                 Wi[:,k] = w_tmp/np.linalg.norm(w_tmp)
 
             self.W.append(Wi)
@@ -360,10 +366,12 @@ class MSCCA(CCABase):
             for itr in range(self.max_iter):
                 # loop over views
                 for i in range(self.n_views):
+                    if verbose and itr % 100 == 0:
+                        print('iter:', itr, 'view', i, 'component', k)
                     if len(X[i].shape) == 1 or X[i].shape[1] == 1:
                         # trivial case
                         w  = sign[i]
-                    else:                                            
+                    else:
                         a = self._compute_update(X, i, k, has_data=samples_included)
 
                         if sign[i] > 0:
@@ -375,10 +383,13 @@ class MSCCA(CCABase):
                         S_p = np.abs(a)
                         a = sign_a * (S_p * (S_p > 0))
                         w = a / np.linalg.norm(a)
+                        if np.isnan(w).any():
+                            print('Warning: update does not meet constraints', itr, i, k )
+                            continue
                         norm_wr = np.linalg.norm(w,1).round(decimals=2)
 
                         w = self._sparsify(w, a, norm_wr, self.c[i], sign_a)
-                    
+                            
                     self.W[i][:,k] = w
                     self.scores[i][:,k] = X[i].dot(w)
             
