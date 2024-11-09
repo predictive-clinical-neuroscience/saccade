@@ -384,7 +384,7 @@ class MSCCA(CCABase):
                         a = sign_a * (S_p * (S_p > 0))
                         w = a / np.linalg.norm(a)
                         if np.isnan(w).any():
-                            print('Warning: update does not meet constraints', itr, i, k )
+                            print(f'Warning: update contains invalid entries. iter={itr}, view={i}, comp={k}')
                             continue
                         norm_wr = np.linalg.norm(w,1).round(decimals=2)
 
