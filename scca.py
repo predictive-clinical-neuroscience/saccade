@@ -405,3 +405,76 @@ class MSCCA(CCABase):
             xs_scores.append(Xs[i].dot(self.W[i]))
 
         return xs_scores
+
+def mscca_fit_predict(X, l1, sign, tr=None, tr_frac=0.5, rank=1, has_data=None, niter=1000, verbose=False):
+    """
+    Prform a single train-test split for of an msCCA model. 
+
+    :param X: list of data matrices
+    :param l1: list of l1 penalties
+    :param tr: array of boolean indicator values for which samples to inclue as trainig (the rest are test)
+    :param tr_frac: as an alternative, the fraction of data that are randomly selected as training
+    :param rank: rank of the CCA model to be estimated
+    :param has_data: list of indicators specifying which data are not missing for each view
+    :param niter: umber of iterations
+
+    :returns R: canonical correlation matrix
+    :returns Cm: model
+    :returns scores_te: canonical scores for the test data
+    """
+
+    n_views = len(X)
+    if tr is None:
+        tr = np.random.uniform(size=X[0].shape[0]) < tr_frac
+    te = ~tr
+       
+    # standardize
+    Xtr = []
+    Xte = []
+    hd_tr = []
+    hd_te = []
+    for v in range(n_views):
+        if has_data is None:
+            trv = tr
+            tev = te
+            hd_tr = None
+            hd_te = None
+        else:
+            trv = tr[has_data[v]]
+            tev = te[has_data[v]]
+            hd_tr.append(has_data[v][tr])
+            hd_te.append(has_data[v][te])
+
+        m = np.mean(X[v][trv,:], axis = 0)
+        s = np.std(X[v][trv,:], axis = 0)
+        Xtr.append( (X[v][trv,:] - m) / s )
+        Xte.append( (X[v][tev,:] - m) / s )
+
+    Cm = MSCCA(n_components=rank, n_views=n_views)
+    Cm.fit(Xtr, l1=l1, sign=sign, verbose=True, has_data=hd_tr, niter=niter)
+    
+    scores_te = Cm.transform(Xte)
+
+    # compute the canonical correlations (general case)
+    R = np.zeros((n_views, n_views, rank)) 
+    for r in range(rank):
+        for i in range(n_views):
+            for j in range(i+1,n_views):
+                if has_data is None: 
+                    c1 = scores_te[i][:,r]
+                    c2 = scores_te[j][:,r]
+                else:
+                    # convert from logical indexing
+                    idx_i = idx = np.zeros(len(hd_te[i]), dtype=int)
+                    idx_i[hd_te[i]] = np.arange(sum(hd_te[i]))
+                    idx_j = idx = np.zeros(len(hd_te[j]), dtype=int)
+                    idx_j[hd_te[j]] = np.arange(sum(hd_te[j]))
+
+                    nz = hd_te[i] & hd_te[j]
+                    c1 = scores_te[i][idx_i[nz], r]
+                    c2 = scores_te[j][idx_j[nz], r]
+                R[i,j,r] = np.corrcoef(c1,c2)[0][1]
+        # put on upper and lower triangle
+        R[:,:,r] = R[:,:,r] + R[:,:,r].T
+
+    return R, Cm, scores_te
