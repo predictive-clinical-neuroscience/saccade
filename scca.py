@@ -451,7 +451,7 @@ def mscca_fit_predict(X, l1, sign, tr=None, tr_frac=0.5, rank=1, has_data=None, 
         Xte.append( (X[v][tev,:] - m) / s )
 
     Cm = MSCCA(n_components=rank, n_views=n_views)
-    Cm.fit(Xtr, l1=l1, sign=sign, verbose=True, has_data=hd_tr, niter=niter)
+    Cm.fit(Xtr, l1=l1, sign=sign, verbose=verbose, has_data=hd_tr, niter=niter)
     
     scores_te = Cm.transform(Xte)
 
